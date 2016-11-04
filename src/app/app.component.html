@@ -1,0 +1,17 @@
+<div class="container">
+  <br>
+	<form (ngSubmit)="doScrap()">
+		<div class="form-group">
+			<label for="product">Please enter any product you search for</label>
+			<input type="text" placeholder="enter your product name" [(ngModel)]="product" name="product" class="form-control">
+		</div>
+		<input type="submit" value="Scrap!" class="btn btn-primary form-control">
+	</form>
+	<br>
+	<div [hidden]="!categories">
+		<h2>Categories are:</h2>
+		<ul *ngFor="let cat of categories">
+			<li>{{cat}}</li>
+		</ul>
+	</div>
+</div>

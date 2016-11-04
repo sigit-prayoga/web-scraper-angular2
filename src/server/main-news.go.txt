@@ -1,0 +1,161 @@
+package mainnews
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/rs/cors"
+	goji "goji.io"
+	"goji.io/pat"
+	"golang.org/x/net/context"
+)
+
+func main() {
+	//initiate new multiplexer
+	mux := goji.NewMux()
+	//register all handler for each end point
+	
+	mux.HandleFuncC(pat.Get("/go/api/scraping"), scraping())
+	//to allow cross origin
+	handler := cors.Default().Handler(mux)
+	//finally, listen and serve in designated host and port
+	http.ListenAndServe(":3001", handler)
+}
+
+func scraping() goji.HandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+		//get url from query params
+		ref := req.URL.Query().Get("url")
+		url, err := url.Parse(ref)
+		if err != nil {
+			fmt.Printf("Invalid URL. Please provide a valid URL.")
+			return
+		}
+		//collect all links available
+		links := crawlForLinks(url)
+		//create a container for all info
+		var metaInfoList []MetaInfo
+		for index, current := range links {
+			if index == 10 {
+				//i'm tired
+				break
+			}
+			//scrap each one of them
+			//get the metaInfo from the current url
+			metaInfo := scrapTheLink(current)
+			if metaInfo == (MetaInfo{}) {
+				//don't add to list
+				continue
+			}
+			fmt.Printf("Adding meta info: %q \n", metaInfo)
+			//then add to array list
+			metaInfoList = append(metaInfoList, metaInfo)
+		}
+
+		//ready to return the list
+		json, error := json.Marshal(metaInfoList)
+		if error != nil {
+			//What's wrong, stop it!
+			log.Fatal(error)
+		}
+		//prepare for the response
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		//send OK status code through header, which is 200 in case you wonder
+		w.WriteHeader(http.StatusOK)
+		//write the list into json as the resonse body
+		w.Write(json)
+	}
+}
+
+func crawlForLinks(url *url.URL) []string {
+	fmt.Printf("Crawling... : %s \n", url)
+	if url.Scheme == "" {
+		//user might input just domain or full URL
+		url.Scheme = "http"
+	}
+	//parse URL to get DOM
+	doc, err := goquery.NewDocument(url.String())
+	if err != nil {
+		//something goes wrong, we should stop
+		log.Fatal(err)
+	}
+	//to filter out which is not from the same host
+	host := url.Host
+	fmt.Printf("Host: %s \n", url.String())
+	//collect all links available
+	var links []string
+
+	//parse the body and loop each element
+	doc.Find("body").Each(func(idx int, s *goquery.Selection) {
+		//especially the a, because we're going to take out the href
+		s.Find("a").Each(func(idx int, s *goquery.Selection) {
+			//yes like this, cool huh
+			ref, _ := s.Attr("href")
+			//do we care about error? Would that be an error? Ask God
+			//we make a assumption here, hope this is not going any issues. Finger crossed!
+
+			//validate the ref
+			url, err := url.Parse(ref)
+			if err != nil || url.Scheme == "" {
+				fmt.Printf("Invalid href. Continue to others.")
+				return
+			}
+
+			fmt.Printf("The a href is: %s \n", url.String())
+			if strings.Contains(url.Host, host) {
+				fmt.Println("added")
+				//hmm how about empty url, skip it dont add to the list
+				//just add if it's from the same host, forget others
+				links = append(links, url.String())
+			}
+		})
+	})
+
+	//just to make sure.
+	fmt.Printf("How many: %d\n", len(links))
+	return links
+}
+
+func scrapTheLink(link string) MetaInfo {
+	//we going to get the meta info of the current page
+	var metaInfo MetaInfo
+	fmt.Printf("Scraping... : %s \n", link)
+	//get the HTML DOM
+	doc, err := goquery.NewDocument(link)
+	if err != nil {
+		//continue
+		return metaInfo
+	}
+
+	metaInfo.URL = link
+	//happy scraping
+	metaInfo.Title = doc.Find("title").Text()
+	doc.Find("meta").EachWithBreak(func(index int, s *goquery.Selection) bool {
+		//who doesn't provide Facebook meta data?
+		//take the meta info of description for Facebook page
+		if name, _ := s.Attr("property"); name == "og:description" {
+			metaInfo.Description, _ = s.Attr("content")
+			return false
+		}
+		//take the image as well.
+		if name, _ := s.Attr("property"); name == "og:image" {
+			metaInfo.ImageUrl, _ = s.Attr("content")
+			return false
+		}
+		return true
+	})
+
+	return metaInfo
+}
+
+type MetaInfo struct {
+	URL         string `json: "url"`
+	Title       string `json: "title"`
+	Description string `json:"description"`
+	ImageUrl    string `json:"imageUrl"`
+}
